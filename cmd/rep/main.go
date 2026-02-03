@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -8,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -125,6 +128,20 @@ func main() {
 		sidecarRootFSPath = path
 	}
 
+	rootfsMetadata := make([]*models.RootfsMetadata, 0)
+	for name, path := range rootFSMap {
+		version, err := findRootFSVersion(path)
+		if err != nil {
+			logger.Error("failed-to-find-rootfs-version", err)
+		}
+
+		rootfsMetadata = append(rootfsMetadata, &models.RootfsMetadata{
+			RootfsVersion: version,
+			RootfsPath:    path,
+			RootfsName:    name,
+		})
+	}
+
 	executorClient, containerMetricsProvider, executorMembers, err := executorinit.Initialize(logger, repConfig.ExecutorConfig, repConfig.CellID, repConfig.Zone, rootFSMap, sidecarRootFSPath, metronClient, clock)
 	if err != nil {
 		logger.Error("failed-to-initialize-executor", err)
@@ -150,7 +167,7 @@ func main() {
 	bbsClient := initializeBBSClient(logger, repConfig)
 	url := repURL(repConfig)
 	address := repAddress(logger, repConfig)
-	cellPresence := initializeCellPresence(address, executorClient, logger, repConfig, repConfig.PreloadedRootFS.Names(), url)
+	cellPresence := initializeCellPresence(address, executorClient, logger, repConfig, repConfig.PreloadedRootFS.Names(), url, rootfsMetadata)
 	batchContainerAllocator := auctioncellrep.NewContainerAllocator(auctioncellrep.GenerateGuid, rootFSMap, executorClient)
 	auctionCellRep := auctioncellrep.New(
 		repConfig.CellID,
@@ -250,6 +267,7 @@ func initializeCellPresence(
 	repConfig config.RepConfig,
 	preloadedRootFSes []string,
 	repUrl string,
+	metadata []*models.RootfsMetadata,
 ) ifrit.Runner {
 	locketClient, err := locket.NewClient(logger, repConfig.ClientLocketConfig)
 	if err != nil {
@@ -268,7 +286,7 @@ func initializeCellPresence(
 	cellCapacity := models.NewCellCapacity(int32(resources.MemoryMB), int32(resources.DiskMB), int32(resources.Containers))
 	cellPresence := models.NewCellPresence(repConfig.CellID, address, repUrl,
 		repConfig.Zone, cellCapacity, repConfig.SupportedProviders,
-		preloadedRootFSes, repConfig.PlacementTags, repConfig.OptionalPlacementTags)
+		preloadedRootFSes, repConfig.PlacementTags, repConfig.OptionalPlacementTags, metadata)
 
 	payload, err := json.Marshal(cellPresence)
 	if err != nil {
@@ -434,4 +452,37 @@ func verifyCertificate(serverCertFile string) error {
 	}
 
 	return errors.New("invalid SAN metadata. certificate needs to contain 127.0.0.1 for IP SAN metadata.")
+}
+
+func findRootFSVersion(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	tarReader := tar.NewReader(file)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+
+		if header == nil {
+			continue
+		}
+
+		// Normalize the path - tar files may have "./", "/", or no prefix
+		cleanName := strings.TrimPrefix(header.Name, "./")
+		cleanName = strings.TrimPrefix(cleanName, "/")
+		if cleanName == "etc/stack-version" {
+			buf := new(bytes.Buffer)
+			if _, err := io.Copy(buf, tarReader); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(buf.String()), nil
+		}
+	}
+
+	return "", nil
 }

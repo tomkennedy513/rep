@@ -100,6 +100,7 @@ type RepConfig struct {
 	PreloadedRootFS           RootFSes              `json:"preloaded_root_fs"`
 	SidecarRootFSPath         string                `json:"sidecar_root_fs_path"`
 	SidecarRootFS             string                `json:"sidecar_root_fs"`
+	StackVersionFilePath      string                `json:"stack_version_path"`
 	ServerCertFile            string                `json:"server_cert_file"` // DEPRECATED. Kept around for dusts compatability
 	ServerKeyFile             string                `json:"server_key_file"`  // DEPRECATED. Kept around for dusts compatability
 	CertFile                  string                `json:"cert_file"`

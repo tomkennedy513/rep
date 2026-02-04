@@ -130,9 +130,12 @@ func main() {
 
 	rootfsMetadata := make([]*models.RootfsMetadata, 0)
 	for name, path := range rootFSMap {
-		version, err := findRootFSVersion(path)
-		if err != nil {
-			logger.Error("failed-to-find-rootfs-version", err)
+		var version string
+		if repConfig.StackVersionFilePath != "" {
+			version, err = findRootFSVersion(repConfig.StackVersionFilePath, path)
+			if err != nil {
+				logger.Error("failed-to-find-rootfs-version", err)
+			}
 		}
 
 		rootfsMetadata = append(rootfsMetadata, &models.RootfsMetadata{
@@ -454,7 +457,9 @@ func verifyCertificate(serverCertFile string) error {
 	return errors.New("invalid SAN metadata. certificate needs to contain 127.0.0.1 for IP SAN metadata.")
 }
 
-func findRootFSVersion(path string) (string, error) {
+func findRootFSVersion(stackVersionFile string, path string) (string, error) {
+	trimmedStackVersionPath := cleanPath(stackVersionFile)
+
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -472,10 +477,7 @@ func findRootFSVersion(path string) (string, error) {
 			continue
 		}
 
-		// Normalize the path - tar files may have "./", "/", or no prefix
-		cleanName := strings.TrimPrefix(header.Name, "./")
-		cleanName = strings.TrimPrefix(cleanName, "/")
-		if cleanName == "etc/stack-version" {
+		if cleanPath(header.Name) == trimmedStackVersionPath {
 			buf := new(bytes.Buffer)
 			if _, err := io.Copy(buf, tarReader); err != nil {
 				return "", err
@@ -485,4 +487,10 @@ func findRootFSVersion(path string) (string, error) {
 	}
 
 	return "", nil
+}
+
+func cleanPath(path string) string {
+	cleanName := strings.TrimPrefix(path, "./")
+	cleanName = strings.TrimPrefix(cleanName, "/")
+	return cleanName
 }
